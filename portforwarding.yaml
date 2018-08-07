@@ -1,0 +1,167 @@
+---
+
+- name: Set port forwarding parameters
+  hosts: virthost:undercloud
+  tasks:
+    - name: Set portforwarding parameters
+      set_fact:
+        portforwardings_ovc:
+          - name: halo
+            port: 5678
+            forward: 10001
+            to: 5678
+          - name: horizon
+            port: 18080
+            forward: 10002
+            to: 80
+          - name: mirana
+            port: 5679
+            forward: 10003
+            to: 5679
+        portforwardings_ops:
+          - name: opsserver
+            port: 8083
+            forward: 10004
+            to: 443
+        portforwardings_endpoints:
+          - name: nova
+            port: 8774
+            forward: 10101
+            to: 8774
+          - name: neutron
+            port: 9696
+            forward: 10102
+            to: 9696
+          - name: cinder
+            port: 8776
+            forward: 10103
+            to: 8776
+          - name: aodh
+            port: 8042
+            forward: 10104
+            to: 8042
+          - name: glance
+            port: 9292
+            forward: 10105
+            to: 9292
+          - name: ceilometer
+            port: 8777
+            forward: 10106
+            to: 8777
+          - name: heat-cfn
+            port: 8000
+            forward: 10107
+            to: 8000
+          - name: heat
+            port: 8004
+            forward: 10108
+            to: 8004
+          - name: zaqar
+            port: 8888
+            forward: 10109
+            to: 8888
+          - name: swift
+            port: 8080
+            forward: 10110
+            to: 8080
+          - name: zaqar-websocket
+            port: 9000
+            forward: 10111
+            to: 9000
+          - name: gnocchi
+            port: 8041
+            forward: 10112
+            to: 8041
+          - name: keystone
+            port: 5000
+            forward: 10113
+            to: 5000
+          - name: rabbitmq-port1
+            port: 5672
+            forward: 10114
+            to: 5672
+          - name: rabbitmq-port2
+            port: 15672
+            forward: 10115
+            to: 15672
+          - name: cloudkitty
+            port: 8889
+            forward: 10116
+            to: 8889
+          - name: nova_novnc
+            port: 6080
+            forward: 10117
+            to: 6080
+
+- name: Add portforwardings to virthost
+  hosts: virthost
+  tasks:
+    - name: Set undercloud ip
+      set_fact:
+        undercloud_ip: "{{ hostvars.undercloud.undercloud_ip }}"
+    - name: Add port forwarding
+      iptables:
+        table: nat
+        action: insert
+        chain: PREROUTING
+        protocol: tcp
+        match: tcp
+        destination_port: "{{ item.port }}"
+        jump: DNAT
+        to_destination: "{{ undercloud_ip }}:{{ item.forward }}"
+      become: yes
+      with_items:
+        - "{{ portforwardings_ovc }}"
+        - "{{ portforwardings_ops }}"
+        - "{{ portforwardings_endpoints }}"
+    - name: Allow forward ports go through filters
+      iptables:
+        table: filter
+        action: insert
+        chain: FORWARD
+        protocol: tcp
+        match: tcp
+        destination_port: "{{ item.forward }}"
+        jump: ACCEPT
+      become: yes
+      with_items:
+        - "{{ portforwardings_ovc }}"
+        - "{{ portforwardings_ops }}"
+        - "{{ portforwardings_endpoints }}"
+
+- name: Add portforwardings to undercloud
+  hosts: undercloud
+  tasks:
+    - name: Set overcloud vip
+      shell: cat /home/stack/overcloudrc  | grep OS_AUTH_URL | awk -F "/" '{print $3}' | awk -F ":" '{print $1}'
+      register: overcloud_vip
+    - name: Add port forwarding to overcloud reversely
+      iptables:
+        table: nat
+        action: insert
+        chain: PREROUTING
+        protocol: tcp
+        match: tcp
+        destination_port: "{{ item.forward }}"
+        jump: DNAT
+        to_destination: "{{ overcloud_vip.stdout }}:{{ item.to }}"
+      become: yes
+      with_items:
+        - "{{ portforwardings_ovc }}"
+        - "{{ portforwardings_endpoints }}"
+    - name: Set Opsserver IP
+      shell: source /home/stack/stackrc && openstack server list | grep opsserver | awk '{print $8}' | awk -F '=' '{print $2}'
+      register: opsserver_ip
+    - name: Add port forwarding to opsserver reversely
+      iptables:
+        table: nat
+        action: insert
+        chain: PREROUTING
+        protocol: tcp
+        match: tcp
+        destination_port: "{{ item.forward }}"
+        jump: DNAT
+        to_destination: "{{ opsserver_ip.stdout }}:{{ item.to }}"
+      become: yes
+      when: opsserver_ip.stdout != ""
+      with_items: "{{ portforwardings_ops }}"
